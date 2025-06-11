@@ -29,17 +29,18 @@ SOFTWARE.
 Description:
 This script implements a web-based control interface for the Pimoroni Plasma 2350 W LED driver board.
 It provides functionality for controlling individual and groups of LEDs, with persistence of LED states
-across power cycles. The interface is served via a WiFi access point and can be accessed through a web browser.
+across power cycles. The interface is served via a WiFi access point and can be accessed through a web
+browser.
 """
+
+import json
+import os
 
 import plasma
 from plasma import plasma_stick
 import phew
 from phew import server, access_point, get_ip_address
 from phew.template import render_template
-import time
-import json
-import os
 
 # WiFi configuration
 WIFI_SSID = "LightBox"
@@ -64,17 +65,17 @@ def load_led_states():
     """Load LED states from file or create default states if file doesn't exist."""
     try:
         if LED_STATE_FILE in os.listdir():
-            with open(LED_STATE_FILE, 'r') as f:
+            with open(LED_STATE_FILE, 'r', encoding='utf-8') as f:
                 states = json.load(f)
                 # Validate the loaded states
-                if len(states) == LED_COUNT and all(
-                    isinstance(state, dict) and 
-                    'color' in state and 
-                    'brightness' in state 
+                if (len(states) == LED_COUNT and all(
+                    isinstance(state, dict) and
+                    'color' in state and
+                    'brightness' in state
                     for state in states
-                ):
+                )):
                     return states
-    except Exception as e:
+    except (IOError, json.JSONDecodeError) as e:
         print(f"Error loading LED states: {e}")
     
     # Return default states if file doesn't exist or is invalid
@@ -83,9 +84,9 @@ def load_led_states():
 def save_led_states(states):
     """Save LED states to file."""
     try:
-        with open(LED_STATE_FILE, 'w') as f:
+        with open(LED_STATE_FILE, 'w', encoding='utf-8') as f:
             json.dump(states, f)
-    except Exception as e:
+    except IOError as e:
         print(f"Error saving LED states: {e}")
 
 # Load initial LED states
@@ -106,13 +107,13 @@ def update_led(index, color, brightness):
     rgb = apply_brightness(rgb, brightness)
     led_strip.set_rgb(index, *rgb)
     led_states[index] = {"color": color, "brightness": brightness}
-    save_led_states(led_states)  # Save after each update
+    save_led_states(led_states)
 
 def update_all_leds(color, brightness):
     """Update all LEDs with the same color and brightness."""
     for i in range(LED_COUNT):
         update_led(i, color, brightness)
-    save_led_states(led_states)  # Save after bulk update
+    save_led_states(led_states)
 
 def restore_led_states():
     """Restore all LEDs to their saved states."""
@@ -121,29 +122,30 @@ def restore_led_states():
         rgb = apply_brightness(rgb, state['brightness'])
         led_strip.set_rgb(i, *rgb)
 
-# Web server routes
 @server.route("/", ["GET"])
 async def index(request):
+    """Serve the main control interface."""
     return await render_template("index.html", led_count=LED_COUNT, led_states=led_states)
 
 @server.route("/update_led", ["POST"])
 def update_led_route(request):
+    """Handle individual LED update requests."""
     try:
         data = json.loads(request.body)
-        index = data.get("index")
+        led_index = data.get("index")
         color = data.get("color")
         brightness = int(data.get("brightness"))
         
-        if 0 <= index < LED_COUNT:
-            update_led(index, color, brightness)
+        if 0 <= led_index < LED_COUNT:
+            update_led(led_index, color, brightness)
             return phew.Response("OK", content_type="text/plain")
-        else:
-            return phew.Response("Invalid LED index", status=400)
-    except Exception as e:
+        return phew.Response("Invalid LED index", status=400)
+    except (ValueError, json.JSONDecodeError) as e:
         return phew.Response(f"Error: {str(e)}", status=400)
 
 @server.route("/update_global", ["POST"])
 def update_global_route(request):
+    """Handle global LED update requests."""
     try:
         data = json.loads(request.body)
         color = data.get("color")
@@ -151,15 +153,16 @@ def update_global_route(request):
         
         update_all_leds(color, brightness)
         return phew.Response("OK", content_type="text/plain")
-    except Exception as e:
+    except (ValueError, json.JSONDecodeError) as e:
         return phew.Response(f"Error: {str(e)}", status=400)
 
-# Catchall route for 404 errors
 @server.catchall()
 async def catchall(request):
+    """Handle 404 errors."""
     return await render_template("404.html", status=404)
 
 def main():
+    """Initialize and start the web server."""
     # Restore LED states from saved configuration
     restore_led_states()
     
