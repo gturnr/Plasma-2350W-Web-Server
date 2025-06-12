@@ -26,13 +26,14 @@
         }
         .led-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            grid-template-columns: repeat(15, 1fr);
             gap: 10px;
             margin-top: 20px;
+            max-width: 100%;
         }
         .led-box {
             aspect-ratio: 1;
-            border: 1px solid #ccc;
+            border: 2px solid #000;
             border-radius: 5px;
             cursor: pointer;
             transition: all 0.3s ease;
@@ -41,6 +42,9 @@
             justify-content: center;
             color: white;
             text-shadow: 1px 1px 1px rgba(0,0,0,0.5);
+            background-color: #ffffff;
+            min-width: 40px;
+            min-height: 40px;
         }
         .led-box:hover {
             transform: scale(1.05);
@@ -104,11 +108,17 @@
                 <input type="range" id="globalBrightness" min="0" max="100" value="100">
                 <span id="globalBrightnessValue">100%</span>
             </div>
-            <button onclick="updateAllLEDs()">Apply to All LEDs</button>
+            <button id="updateAllButton">Apply to All LEDs</button>
         </div>
 
         <div class="controls">
             <h2>Individual LED Control</h2>
+            <div>
+                <label for="ledSelect">Select LED:</label>
+                <select id="ledSelect">
+                    <option value="">Select an LED...</option>
+                </select>
+            </div>
             <div>
                 <label for="ledColor">Color:</label>
                 <input type="color" id="ledColor" value="#ffffff">
@@ -118,6 +128,7 @@
                 <input type="range" id="ledBrightness" min="0" max="100" value="100">
                 <span id="ledBrightnessValue">100%</span>
             </div>
+            <button id="applyToLedButton">Apply to LED</button>
             <div id="status" class="status" style="display: none;"></div>
         </div>
 
@@ -126,29 +137,90 @@
     </div>
 
     <script>
-        const ledCount = {{ led_count }};
-        const initialStates = {{ led_states|tojson }};
-        let selectedLed = null;
-
-        // Initialize LED grid
-        function initializeLEDGrid() {
-            const grid = document.getElementById('ledGrid');
-            grid.innerHTML = '';
-            
-            for (let i = 0; i < ledCount; i++) {
-                const ledBox = document.createElement('div');
-                ledBox.className = 'led-box';
-                ledBox.textContent = i + 1;
-                ledBox.style.backgroundColor = initialStates[i].color;
-                ledBox.style.opacity = initialStates[i].brightness / 100;
-                
-                ledBox.onclick = () => selectLED(i, ledBox);
-                grid.appendChild(ledBox);
+        // Safely parse the LED count
+        const ledCount = parseInt("{{ led_count|default('0') }}") || 0;
+        
+        // Safely parse the initial states with error handling
+        let initialStates = [];
+        try {
+            const statesJson = '{{ led_states|tojson|safe|default("[]") }}';
+            initialStates = JSON.parse(statesJson);
+            // Ensure initialStates is an array
+            if (!Array.isArray(initialStates)) {
+                initialStates = [];
             }
+        } catch (e) {
+            console.error('Error parsing LED states:', e);
+            initialStates = [];
+        }
+        
+        // Initialize with default states if needed
+        while (initialStates.length < ledCount) {
+            initialStates.push({
+                color: '#ffffff',
+                brightness: 100
+            });
         }
 
-        // Select an LED
-        function selectLED(index, element) {
+        let selectedLed = null;
+
+        // Make functions globally accessible
+        window.updateLED = function(index, color, brightness) {
+            fetch('/update_led', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ index, color, brightness }),
+            })
+            .then(response => {
+                if (response.ok) {
+                    showStatus('LED updated successfully', 'success');
+                    // Update the LED box appearance
+                    const ledBox = document.querySelector(`.led-box:nth-child(${index + 1})`);
+                    ledBox.style.backgroundColor = color;
+                    ledBox.style.opacity = brightness / 100;
+                    // Update the stored state
+                    initialStates[index] = { color, brightness };
+                } else {
+                    showStatus('Failed to update LED', 'error');
+                }
+            })
+            .catch(error => {
+                showStatus('Error updating LED: ' + error, 'error');
+            });
+        }
+
+        window.updateAllLEDs = function() {
+            const color = document.getElementById('globalColor').value;
+            const brightness = parseInt(document.getElementById('globalBrightness').value);
+            
+            fetch('/update_global', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ color, brightness }),
+            })
+            .then(response => {
+                if (response.ok) {
+                    showStatus('All LEDs updated successfully', 'success');
+                    // Update all LED boxes
+                    document.querySelectorAll('.led-box').forEach((ledBox, index) => {
+                        ledBox.style.backgroundColor = color;
+                        ledBox.style.opacity = brightness / 100;
+                        initialStates[index] = { color, brightness };
+                    });
+                } else {
+                    showStatus('Failed to update LEDs', 'error');
+                }
+            })
+            .catch(error => {
+                showStatus('Error updating LEDs: ' + error, 'error');
+            });
+        }
+
+        window.selectLED = function(index, element) {
             // Remove selection from previously selected LED
             if (selectedLed) {
                 selectedLed.style.border = '1px solid #ccc';
@@ -164,65 +236,7 @@
             document.getElementById('ledBrightnessValue').textContent = initialStates[index].brightness + '%';
         }
 
-        // Update a single LED
-        async function updateLED(index, color, brightness) {
-            try {
-                const response = await fetch('/update_led', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ index, color, brightness }),
-                });
-                
-                if (response.ok) {
-                    showStatus('LED updated successfully', 'success');
-                    // Update the LED box appearance
-                    const ledBox = document.querySelector(`.led-box:nth-child(${index + 1})`);
-                    ledBox.style.backgroundColor = color;
-                    ledBox.style.opacity = brightness / 100;
-                    // Update the stored state
-                    initialStates[index] = { color, brightness };
-                } else {
-                    showStatus('Failed to update LED', 'error');
-                }
-            } catch (error) {
-                showStatus('Error updating LED: ' + error, 'error');
-            }
-        }
-
-        // Update all LEDs
-        async function updateAllLEDs() {
-            const color = document.getElementById('globalColor').value;
-            const brightness = parseInt(document.getElementById('globalBrightness').value);
-            
-            try {
-                const response = await fetch('/update_global', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ color, brightness }),
-                });
-                
-                if (response.ok) {
-                    showStatus('All LEDs updated successfully', 'success');
-                    // Update all LED boxes
-                    document.querySelectorAll('.led-box').forEach((ledBox, index) => {
-                        ledBox.style.backgroundColor = color;
-                        ledBox.style.opacity = brightness / 100;
-                        initialStates[index] = { color, brightness };
-                    });
-                } else {
-                    showStatus('Failed to update LEDs', 'error');
-                }
-            } catch (error) {
-                showStatus('Error updating LEDs: ' + error, 'error');
-            }
-        }
-
-        // Show status message
-        function showStatus(message, type) {
+        window.showStatus = function(message, type) {
             const status = document.getElementById('status');
             status.textContent = message;
             status.className = 'status ' + type;
@@ -232,29 +246,92 @@
             }, 3000);
         }
 
-        // Event listeners for brightness sliders
-        document.getElementById('ledBrightness').addEventListener('input', function(e) {
-            document.getElementById('ledBrightnessValue').textContent = e.target.value + '%';
-            if (selectedLed) {
-                const index = Array.from(selectedLed.parentNode.children).indexOf(selectedLed);
-                updateLED(index, document.getElementById('ledColor').value, parseInt(e.target.value));
+        // Initialize LED grid
+        function initializeLEDGrid() {
+            const grid = document.getElementById('ledGrid');
+            grid.innerHTML = '';
+            
+            for (let i = 0; i < ledCount; i++) {
+                const ledBox = document.createElement('div');
+                ledBox.className = 'led-box';
+                ledBox.textContent = i + 1;
+                
+                // Set initial color and brightness
+                const state = initialStates[i];
+                ledBox.style.backgroundColor = state.color;
+                ledBox.style.opacity = state.brightness / 100;
+                
+                // Add click handler
+                ledBox.addEventListener('click', () => {
+                    selectLED(i, ledBox);
+                    // Update dropdown to match selected LED
+                    document.getElementById('ledSelect').value = i;
+                });
+                
+                grid.appendChild(ledBox);
             }
-        });
+        }
 
-        document.getElementById('globalBrightness').addEventListener('input', function(e) {
-            document.getElementById('globalBrightnessValue').textContent = e.target.value + '%';
-        });
+        // Add all event listeners after DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            // Update all button
+            document.getElementById('updateAllButton').addEventListener('click', updateAllLEDs);
 
-        // Event listener for color picker
-        document.getElementById('ledColor').addEventListener('input', function(e) {
-            if (selectedLed) {
-                const index = Array.from(selectedLed.parentNode.children).indexOf(selectedLed);
-                updateLED(index, e.target.value, parseInt(document.getElementById('ledBrightness').value));
+            // Initialize LED select dropdown
+            const ledSelect = document.getElementById('ledSelect');
+            for (let i = 0; i < ledCount; i++) {
+                const option = document.createElement('option');
+                option.value = i;
+                option.textContent = `LED ${i + 1}`;
+                ledSelect.appendChild(option);
             }
-        });
 
-        // Initialize the LED grid
-        initializeLEDGrid();
+            // LED select change handler
+            ledSelect.addEventListener('change', function(e) {
+                const selectedIndex = parseInt(e.target.value);
+                if (!isNaN(selectedIndex)) {
+                    const ledBox = document.querySelector(`.led-box:nth-child(${selectedIndex + 1})`);
+                    selectLED(selectedIndex, ledBox);
+                }
+            });
+
+            // Apply to LED button
+            document.getElementById('applyToLedButton').addEventListener('click', function() {
+                const selectedIndex = parseInt(document.getElementById('ledSelect').value);
+                if (isNaN(selectedIndex)) {
+                    showStatus('Please select an LED first', 'error');
+                    return;
+                }
+                const color = document.getElementById('ledColor').value;
+                const brightness = parseInt(document.getElementById('ledBrightness').value);
+                updateLED(selectedIndex, color, brightness);
+            });
+
+            // LED brightness slider
+            document.getElementById('ledBrightness').addEventListener('input', function(e) {
+                document.getElementById('ledBrightnessValue').textContent = e.target.value + '%';
+            });
+
+            // Global brightness slider
+            document.getElementById('globalBrightness').addEventListener('input', function(e) {
+                document.getElementById('globalBrightnessValue').textContent = e.target.value + '%';
+            });
+
+            // LED color picker
+            document.getElementById('ledColor').addEventListener('input', function(e) {
+                // Only update preview if an LED is selected
+                const selectedIndex = parseInt(document.getElementById('ledSelect').value);
+                if (!isNaN(selectedIndex)) {
+                    const ledBox = document.querySelector(`.led-box:nth-child(${selectedIndex + 1})`);
+                    if (ledBox) {
+                        ledBox.style.backgroundColor = e.target.value;
+                    }
+                }
+            });
+
+            // Initialize the LED grid
+            initializeLEDGrid();
+        });
     </script>
 </body>
 </html> 
